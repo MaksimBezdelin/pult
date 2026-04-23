@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bluetooth Robot Control</title>
+    <style>
+        body { 
+            margin: 0; padding: 20px; font-family: 'Segoe UI', sans-serif; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            color: white; min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+        }
+        h1 { margin: 10px 0; text-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+        button { 
+            background: rgba(255,255,255,0.2); border: none; border-radius: 15px; 
+            padding: 15px 25px; color: white; font-size: 16px; margin: 10px; 
+            cursor: pointer; transition: all 0.3s; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        button:hover { background: rgba(255,255,255,0.4); transform: translateY(-2px); }
+        button:active { transform: translateY(0); }
+        #joystick { width: 200px; height: 200px; margin: 20px auto; background: rgba(255,255,255,0.1); border-radius: 50%; position: relative; }
+        #knob { width: 60px; height: 60px; background: white; border-radius: 50%; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); transition: 0.1s; }
+        .servo-group { display: flex; flex-wrap: wrap; justify-content: center; margin: 20px 0; }
+        .servo-group button { margin: 5px; padding: 12px 20px; font-size: 14px; }
+        #status { margin: 10px; padding: 10px; border-radius: 10px; background: rgba(0,0,0,0.3); }
+    </style>
+</head>
+<body>
+    <h1>🤖 Управление роботом по Bluetooth</h1>
+    <button id="connect">🔌 Подключить BLE</button>
+    <div id="status">Готов к подключению</div>
+    
+    <div id="joystick">
+        <div id="knob"></div>
+    </div>
+    
+    <div>
+        <button id="forward">⬆️ Вперед</button>
+        <button id="backward">⬇️ Назад</button>
+        <button id="left">⬅️ Влево</button>
+        <button id="right">➡️ Вправо</button>
+        <button id="stop">⏹️ Стоп</button>
+    </div>
+    
+    <div class="servo-group">
+        <h3>Серво 1</h3>
+        <button id="servo1-left">↖️ Лев</button>
+        <button id="servo1-right">↘️ Прав</button>
+        
+        <h3>Серво 2</h3>
+        <button id="servo2-left">↖️ Лев</button>
+        <button id="servo2-right">↘️ Прав</button>
+        
+        <h3>Серво 3</h3>
+        <button id="servo3-left">↖️ Лев</button>
+        <button id="servo3-right">↘️ Прав</button>
+        
+        <h3>Серво 4</h3>
+        <button id="servo4-left">↖️ Лев</button>
+        <button id="servo4-right">↘️ Прав</button>
+    </div>
+
+    <script>
+        let device, server, driveChar, servoChars = [];
+        const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e'; // Стандартный Nordic UART или ваш
+        const DRIVE_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // Для движения
+        const SERVO_BASE_UUID = '6e40000'; // Базовый для серво: 6e400003, 004, 005, 006 для left/right
+
+        const status = document.getElementById('status');
+        const connectBtn = document.getElementById('connect');
+        const joystick = document.getElementById('joystick');
+        const knob = document.getElementById('knob');
+
+        // Подключение BLE
+        connectBtn.onclick = async () => {
+            try {
+                device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }] });
+                server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                driveChar = await service.getCharacteristic(DRIVE_UUID);
+                
+                // Серво характеристики (left/right для 4 серво)
+                for (let i = 1; i <= 4; i++) {
+                    const leftUuid = `${SERVO_BASE_UUID}${i*2-1}_b5a3-f393-e0a9-e50e24dcca9e`;
+                    const rightUuid = `${SERVO_BASE_UUID}${i*2}_b5a3-f393-e0a9-e50e24dcca9e`;
+                    servoChars.push(await service.getCharacteristic(leftUuid));
+                    servoChars.push(await service.getCharacteristic(rightUuid));
+                }
+                
+                status.textContent = '✅ Подключено!';
+                connectBtn.textContent = '🔌 Отключить';
+                connectBtn.onclick = () => device.gatt.disconnect();
+            } catch (err) {
+                status.textContent = '❌ Ошибка: ' + err;
+            }
+        };
+
+        // Джойстик
+        let joystickActive = false;
+        joystick.onpointerdown = (e) => {
+            joystickActive = true;
+            updateJoystick(e);
+        };
+        joystick.onpointermove = (e) => {
+            if (joystickActive) updateJoystick(e);
+        };
+        joystick.onpointerup = () => {
+            joystickActive = false;
+            resetJoystick();
+            sendCommand('S'); // Стоп
+        };
+
+        function updateJoystick(e) {
+            const rect = joystick.getBoundingClientRect();
+            let x = e.clientX - rect.left - rect.width / 2;
+            let y = e.clientY - rect.top - rect.height / 2;
+            const max = 70;
+            const dist = Math.min(Math.sqrt(x*x + y*y), max);
+            x = (x / dist) * (dist / max) * 100;
+            y = (y / dist) * (dist / max) * 100;
+            knob.style.left = `calc(50% + ${x}px)`;
+            knob.style.top = `calc(50% + ${y}px)`;
+            
+            if (Math.abs(x) > 20 || Math.abs(y) > 20) {
+                sendCommand(`J${Math.round(x)},${Math.round(y)}`);
+            }
+        }
+
+        function resetJoystick() {
+            knob.style.left = '50%';
+            knob.style.top = '50%';
+        }
+
+        // Кнопки движения
+        document.getElementById('forward').onclick = () => sendCommand('F');
+        document.getElementById('backward').onclick = () => sendCommand('B');
+        document.getElementById('left').onclick = () => sendCommand('L');
+        document.getElementById('right').onclick = () => sendCommand('R');
+        document.getElementById('stop').onclick = () => sendCommand('S');
+
+        // Серво кнопки (индексы 0-7)
+        ['servo1-left', 'servo1-right', 'servo2-left', 'servo2-right', 'servo3-left', 'servo3-right', 'servo4-left', 'servo4-right'].forEach((id, i) => {
+            document.getElementById(id).onclick = () => {
+                servoChars[i].writeValue(new TextEncoder().encode(`1`)); // Отправить '1' на серво
+            };
+        });
+
+        function sendCommand(cmd) {
+            if (driveChar) {
+                driveChar.writeValue(new TextEncoder().encode(cmd));
+            }
+        }
+    </script>
+</body>
+</html>
